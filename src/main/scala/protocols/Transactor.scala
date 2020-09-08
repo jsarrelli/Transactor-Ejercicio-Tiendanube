@@ -38,7 +38,7 @@ object Transactor {
     *                       terminating the session
     */
   def apply[T](value: T, sessionTimeout: FiniteDuration): Behavior[Command[T]] = Behaviors.setup  { _ =>
-    SelectiveReceive(30, idle(value, sessionTimeout)).asInstanceOf[Behavior[Command[T]]]
+    SelectiveReceive(30, idle(value, sessionTimeout)).narrow
   }
 
   /**

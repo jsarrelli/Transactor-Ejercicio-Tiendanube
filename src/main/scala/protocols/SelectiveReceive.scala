@@ -1,7 +1,7 @@
 package protocols
 
 import akka.actor.typed.Behavior
-import akka.actor.typed.Behavior.{interpretMessage, isUnhandled, start}
+import akka.actor.typed.Behavior.isUnhandled
 import akka.actor.typed.scaladsl._
 
 import scala.reflect.ClassTag

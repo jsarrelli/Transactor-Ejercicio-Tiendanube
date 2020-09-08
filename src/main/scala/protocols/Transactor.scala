@@ -37,8 +37,8 @@ object Transactor {
     * @param sessionTimeout Delay before rolling back the pending modifications and
     *                       terminating the session
     */
-  def apply[T](value: T, sessionTimeout: FiniteDuration): Behavior[PrivateCommand[T]] = Behaviors.setup { context =>
-    SelectiveReceive(30, idle(value, sessionTimeout))
+  def apply[T](value: T, sessionTimeout: FiniteDuration): Behavior[Command[T]] = Behaviors.setup  { _ =>
+    SelectiveReceive(30, idle(value, sessionTimeout)).asInstanceOf[Behavior[Command[T]]]
   }
 
   /**
@@ -68,7 +68,7 @@ object Transactor {
         ctx.scheduleOnce(sessionTimeout, ctx.self, RolledBack(sessionRef))
         replyTo ! sessionRef
         inSession(value, sessionTimeout, sessionRef)
-      case (ctx, _: PrivateCommand[T]) => Behaviors.ignore
+      case (_, _: PrivateCommand[T]) => Behaviors.ignore
     }
 
   /**
@@ -82,12 +82,12 @@ object Transactor {
     */
   private def inSession[T](rollbackValue: T, sessionTimeout: FiniteDuration, sessionRef: ActorRef[Session[T]]): Behavior[PrivateCommand[T]] =
     Behaviors.receive {
-      case (ctx, Committed(session, value)) if session == sessionRef =>
+      case (_, Committed(session, value)) if session == sessionRef =>
         idle(value, sessionTimeout)
       case (ctx, RolledBack(session)) if session == sessionRef =>
         ctx.stop(session)
         idle(rollbackValue, sessionTimeout)
-      case (ctx, Begin(_)) => Behaviors.unhandled
+      case (_, Begin(_)) => Behaviors.unhandled
     }
 
   /**
@@ -98,15 +98,15 @@ object Transactor {
     * @param done         Set of already applied [[Modify]] messages
     */
   private def sessionHandler[T](currentValue: T, commit: ActorRef[Committed[T]], done: Set[Long]): Behavior[Session[T]] = Behaviors.receive {
-    case (ctx, Modify(f, id, reply, replyTo)) =>
+    case (_, Modify(f, id, reply, replyTo)) =>
       val updatedValue = f(currentValue)
       replyTo ! reply
       if (!done.contains(id)) sessionHandler(updatedValue, commit, done + id)
       else sessionHandler(currentValue, commit, done)
-    case (ctx, Extract(f, replyTo)) =>
+    case (_, Extract(f, replyTo)) =>
       replyTo ! f(currentValue)
       sessionHandler(currentValue, commit, done)
-    case (ctx, Rollback()) =>
+    case (_, Rollback()) =>
       Behaviors.stopped
     case (ctx, Commit(reply, replyTo)) =>
       replyTo ! reply

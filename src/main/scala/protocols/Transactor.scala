@@ -1,7 +1,6 @@
 package protocols
 
 import akka.actor.typed._
-import akka.actor.typed.scaladsl.Behaviors.{receiveMessagePartial, same}
 import akka.actor.typed.scaladsl._
 
 import scala.concurrent.duration._
@@ -38,7 +37,9 @@ object Transactor {
     * @param sessionTimeout Delay before rolling back the pending modifications and
     *                       terminating the session
     */
-  def apply[T](value: T, sessionTimeout: FiniteDuration): Behavior[Command[T]] = ???
+  def apply[T](value: T, sessionTimeout: FiniteDuration): Behavior[PrivateCommand[T]] = Behaviors.setup { context =>
+    SelectiveReceive(30, idle(value, sessionTimeout))
+  }
 
   /**
     * @return A behavior that defines how to react to any [[PrivateCommand]] when the transactor
@@ -62,11 +63,12 @@ object Transactor {
   private def idle[T](value: T, sessionTimeout: FiniteDuration): Behavior[PrivateCommand[T]] =
     Behaviors.receive {
       case (ctx, Begin(replyTo)) =>
-        val sessionRef = ctx.spawnAnonymous(sessionHandler(value, ctx.self, Set.empty))
+        val sessionRef: ActorRef[Session[T]] = ctx.spawnAnonymous(sessionHandler(value, ctx.self, Set.empty))
         ctx.watchWith(sessionRef, RolledBack(sessionRef))
-        ctx.scheduleOnce(1 seconds, ctx.self, RolledBack(sessionRef))
+        ctx.scheduleOnce(sessionTimeout, ctx.self, RolledBack(sessionRef))
         replyTo ! sessionRef
         inSession(value, sessionTimeout, sessionRef)
+      case (ctx, _: PrivateCommand[T]) => Behaviors.ignore
     }
 
   /**
@@ -83,7 +85,9 @@ object Transactor {
       case (ctx, Committed(session, value)) if session == sessionRef =>
         idle(value, sessionTimeout)
       case (ctx, RolledBack(session)) if session == sessionRef =>
+        ctx.stop(session)
         idle(rollbackValue, sessionTimeout)
+      case (ctx, Begin(_)) => Behaviors.unhandled
     }
 
   /**
@@ -97,14 +101,13 @@ object Transactor {
     case (ctx, Modify(f, id, reply, replyTo)) =>
       val updatedValue = f(currentValue)
       replyTo ! reply
-      if (done.contains(id)) sessionHandler(updatedValue, commit, done + id)
+      if (!done.contains(id)) sessionHandler(updatedValue, commit, done + id)
       else sessionHandler(currentValue, commit, done)
     case (ctx, Extract(f, replyTo)) =>
       replyTo ! f(currentValue)
       sessionHandler(currentValue, commit, done)
     case (ctx, Rollback()) =>
-      //commit ! RolledBack(ctx.self)
-      Behaviors.stopped()
+      Behaviors.stopped
     case (ctx, Commit(reply, replyTo)) =>
       replyTo ! reply
       commit ! Committed(ctx.self, value = currentValue)

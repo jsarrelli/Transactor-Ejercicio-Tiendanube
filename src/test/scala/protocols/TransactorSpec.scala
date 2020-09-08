@@ -134,7 +134,7 @@ trait TransactorSpec {
     val refs = sessionInbox.receiveAll()
     assert(refs.size == 1, "A session should be created upon reception of a `Begin` message")
     testkit.retrieveAllEffects() // Clear effects produced by the session creation
-    val ref: ActorRef[Session[Int]] = refs.head
+    val ref = refs.head
     assertEquals(testkit.childInbox(ref.path.name).ref, ref)
     val session = testkit.childTestKit(ref)
 

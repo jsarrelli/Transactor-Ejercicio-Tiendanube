@@ -1,6 +1,7 @@
 package protocols
 
 import akka.actor.typed._
+import akka.actor.typed.scaladsl.Behaviors.{receiveMessagePartial, same}
 import akka.actor.typed.scaladsl._
 
 import scala.concurrent.duration._
@@ -62,6 +63,8 @@ object Transactor {
     Behaviors.receive {
       case (ctx, Begin(replyTo)) =>
         val sessionRef = ctx.spawnAnonymous(sessionHandler(value, ctx.self, Set.empty))
+        ctx.watchWith(sessionRef, RolledBack(sessionRef))
+        ctx.scheduleOnce(1 seconds, ctx.self, RolledBack(sessionRef))
         replyTo ! sessionRef
         inSession(value, sessionTimeout, sessionRef)
     }
@@ -77,11 +80,10 @@ object Transactor {
     */
   private def inSession[T](rollbackValue: T, sessionTimeout: FiniteDuration, sessionRef: ActorRef[Session[T]]): Behavior[PrivateCommand[T]] =
     Behaviors.receive {
-      case (ctx, Committed(session, value)) =>
-
+      case (ctx, Committed(session, value)) if session == sessionRef =>
         idle(value, sessionTimeout)
-      case (ctx, RolledBack(session)) => idle(rollbackValue, sessionTimeout)
-
+      case (ctx, RolledBack(session)) if session == sessionRef =>
+        idle(rollbackValue, sessionTimeout)
     }
 
   /**
@@ -95,17 +97,18 @@ object Transactor {
     case (ctx, Modify(f, id, reply, replyTo)) =>
       val updatedValue = f(currentValue)
       replyTo ! reply
-      sessionHandler(updatedValue, commit, done + id)
+      if (done.contains(id)) sessionHandler(updatedValue, commit, done + id)
+      else sessionHandler(currentValue, commit, done)
     case (ctx, Extract(f, replyTo)) =>
       replyTo ! f(currentValue)
       sessionHandler(currentValue, commit, done)
-    case (ctx, Rollback()) => Behaviors.empty
-
+    case (ctx, Rollback()) =>
+      //commit ! RolledBack(ctx.self)
+      Behaviors.stopped()
     case (ctx, Commit(reply, replyTo)) =>
       replyTo ! reply
       commit ! Committed(ctx.self, value = currentValue)
       Behaviors.stopped
-
   }
 
 }
